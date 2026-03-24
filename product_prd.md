@@ -11,8 +11,8 @@ A lightweight, high-performance web crawler that indexes web pages and provides 
 - **Parameters:**
   - `origin`: Starting URL.
   - `k`: Maximum number of hops from the origin.
-- **Back-Pressure:** Implement a mechanism to control the rate of crawling (e.g., max concurrent requests, request rate limiting) to prevent system overload.
-- **Scale:** Architecture optimized for large-scale operations on a single node.
+- **Back-Pressure:** Implement a mechanism to control the rate of crawling via a configurable `hitRate` (requests per second) and `maxConcurrent` requests to prevent system overload.
+- **Scale:** Architecture optimized for large-scale operations on a single node using a persistent persistent queue.
 
 ### 2.2 Searching (`/search`)
 - **Capability:** Query the indexed content and return relevant results.
@@ -28,11 +28,11 @@ A lightweight, high-performance web crawler that indexes web pages and provides 
   - Performance metrics (requests per second).
 
 ## 3. Technical Stack
-- **Framework:** Next.js 14 (App Router).
+- **Framework:** Next.js 16 (App Router).
 - **Language:** TypeScript.
-- **Crawler:** Native Fetch API / Node.js core modules (no heavy crawler libraries).
-- **State Management:** In-memory or local storage (JSON/SQLite).
-- **Styling:** Vanilla CSS / Tailwind (for a premium UI).
+- **Crawler:** Cheerio / Fetch API / Node.js.
+- **State Management:** SQLite via `better-sqlite3` for high-performance local persistence.
+- **Styling:** Tailwind CSS (for a premium UI).
 
 ## 4. Architectural Considerations
 - **Concurrency Model:** Using a worker-like pattern or async request pools for crawling.
