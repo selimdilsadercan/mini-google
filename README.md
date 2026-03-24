@@ -31,7 +31,7 @@ A high-performance, concurrent web crawler and search engine built with **Next.j
    cd core
    ```
 3. Setup Database (Optional):
-   - **Option A: Start with Pre-crawled Data (200MB):** We provide a large pre-indexed database via GitHub Releases to bypass the 100MB repository limit. This contains the data required for the `quiz.md`. Run:
+   - **Option A: Start with Pre-crawled Data (200MB):** I provide a large pre-indexed database via GitHub Releases to bypass the 100MB repository limit. This contains the data required for the `quiz.md`. Run:
      ```bash
      npm run db:setup
      ```
@@ -50,7 +50,7 @@ A high-performance, concurrent web crawler and search engine built with **Next.j
 The engine uses a non-blocking, asynchronous queue to fetch pages. To manage "back-pressure," it limits the number of concurrent network requests and processes pages in batches. Deduplication is handled via a URL set to ensure no page is visited twice.
 
 ### Search Design (Requirement Answer)
-To allow search while indexing is active, we utilize a **Concurrent Reader-Writer** pattern facilitated by **SQLite (WAL Mode)** or a decoupled architecture. As new pages are parsed, they are immediately committed to a search-optimized table. This ensures the search engine queries are non-blocking and always reflect the most recently crawled data without waiting for the entire crawl to finish.
+To allow search while indexing is active, I utilize a **Concurrent Reader-Writer** pattern facilitated by **SQLite (WAL Mode)** or a decoupled architecture. As new pages are parsed, they are immediately committed to a search-optimized table. This ensures the search engine queries are non-blocking and always reflect the most recently crawled data without waiting for the entire crawl to finish.
 
 ## 📜 Documentation
 - [Gereksinimler (PRD)](./product_prd.md)
