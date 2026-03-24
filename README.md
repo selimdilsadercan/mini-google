@@ -30,10 +30,12 @@ A high-performance, concurrent web crawler and search engine built with **Next.j
    git clone <repository-url>
    cd core
    ```
-3. Setup Database (Large DB Download):
-   ```bash
-   npm run db:setup
-   ```
+3. Setup Database (Optional):
+   - **Option A: Start with Pre-crawled Data (200MB):** We provide a large pre-indexed database via GitHub Releases to bypass the 100MB repository limit. This contains the data required for the `quiz.md`. Run:
+     ```bash
+     npm run db:setup
+     ```
+   - **Option B: Start from Scratch:** If you prefer to start with an empty index, skip the step above. The system will automatically generate a fresh `crawler.db` when you initiate your first crawl.
 
 ### Running Locally
 1. Start the development server:
