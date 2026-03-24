@@ -7,7 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // BURAYA BULUT LINKINI YAZACAGIZ
-const DB_URL = process.env.DB_URL || "YOUR_CLOUDFLARE_DIRECT_LINK_HERE";
+const DB_URL = process.env.DB_URL || "https://github.com/selimdilsadercan/mini-google/releases/download/v0.0.0/crawler.db";
 const TARGET_PATH = path.resolve(__dirname, "../crawler.db");
 
 async function downloadWithRedirect(url, targetPath) {
