@@ -1,6 +1,7 @@
-import * as cheerio from 'cheerio';
 import { dbService } from '@/lib/db';
-import { v4 as uuidv4 } from 'uuid'; // npm install uuid required
+import { v4 as uuidv4 } from 'uuid';
+import { Worker } from 'worker_threads';
+import path from 'path';
 
 class CrawlJob {
   public id: string;
@@ -11,6 +12,7 @@ class CrawlJob {
   private activeRequests: number = 0;
   private maxConcurrent: number = 5;
   private delay: number; // ms
+  private worker: Worker;
 
   constructor(id: string, origin: string, maxDepth: number, hitRate: number, onlyExternalDomains: boolean = false) {
     this.id = id;
@@ -18,12 +20,31 @@ class CrawlJob {
     this.maxDepth = maxDepth;
     this.delay = Math.floor(1000 / hitRate);
     this.onlyExternalDomains = onlyExternalDomains;
-    log(this.id, `Job initialized for ${origin} with max depth ${maxDepth}, hit rate ${hitRate}/s, external only: ${onlyExternalDomains}`);
+
+    // Initialize Worker
+    const workerPath = path.resolve(process.cwd(), 'lib/worker.ts');
+    this.worker = new Worker(workerPath, { execArgv: ['--conditions', 'typescript'] }); // Support TS via Bun/Loader
+    
+    this.worker.on('message', (msg) => {
+      if (msg.type === 'RESULT') {
+        this.handleWorkerResult(msg.url, msg.data);
+      } else if (msg.type === 'ERROR') {
+        this.handleWorkerError(msg.url, msg.error);
+      }
+    });
+
+    this.worker.on('error', (err) => {
+      log(this.id, `Worker Critical Error: ${err.message}`, 'error');
+    });
+
+    log(this.id, `Job initialized with worker. Origin: ${origin}, Depth: ${maxDepth}`);
   }
 
-  public async start() {
+  public async start(isResume: boolean = false) {
     dbService.updateCrawlerStatus(this.id, 'running');
-    dbService.addToQueue(this.id, this.origin, 0);
+    if (!isResume) {
+      dbService.addToQueue(this.id, this.origin, 0);
+    }
     this.processQueue();
   }
 
@@ -41,8 +62,11 @@ class CrawlJob {
         if (job) {
           this.activeRequests++;
           dbService.updateQueueStatus(this.id, job.url, 'processing');
-          this.crawlPage(job).finally(() => {
-            this.activeRequests--;
+          this.worker.postMessage({ 
+            type: 'CRAWL', 
+            url: job.url, 
+            onlyExternalDomains: this.onlyExternalDomains,
+            depth: job.depth 
           });
         } else if (this.activeRequests === 0) {
           // Finished
@@ -56,101 +80,42 @@ class CrawlJob {
     }
   }
 
-  private async crawlPage(target: { url: string; depth: number }) {
-    try {
-      log(this.id, `Fetching: ${target.url} (Depth: ${target.depth})`);
-      const response = await fetch(target.url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-          'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
-        },
-        signal: AbortSignal.timeout(10000)
-      });
-
-      if (!response.ok) {
-        dbService.updateQueueStatus(this.id, target.url, 'error');
-        log(this.id, `Failed to fetch ${target.url} (Status: ${response.status})`, 'error');
-        return;
-      }
-
-      const html = await response.text();
-      const $ = cheerio.load(html);
-      
-      // Target ONLY the primary head title to avoid SVG/Icon titles
-      const title = $('head title').first().text().trim() || 
-                    $('title').first().text().trim() ||
-                    $('h1').first().text().trim() || 
-                    $('meta[property="og:title"]').attr('content') || 
-                    new URL(target.url).pathname.split('/').pop() || 
-                    'Untitled Page';
-                    
-      // Clean up the page before extracting text
-      $('script, style, noscript, svg, path, link').remove();
-      
-      const content = $('body')
-        .text()
-        .replace(/\s+/g, ' ') // Collapse whitespaces
-        .trim();
-      
-      dbService.savePage(this.id, target.url, target.depth, title, content);
-      dbService.updateQueueStatus(this.id, target.url, 'completed');
-      log(this.id, `Indexed ${target.url} successfully`);
-
-      if (target.depth < this.maxDepth) {
-        let discoveredCount = 0;
-       // Junk/Meta Link Filter
-      const isJunk = (url: string) => {
-        const junkPatterns = [
-          'action=edit', 'veaction=edit', 'action=history', 'diff=', 
-          '/wiki/Vikipedi:', '/wiki/Special:', '/wiki/Dosya:', '/wiki/Kategori:',
-          '/wiki/Help:', '/wiki/Tart%C4%B1%C5%9Fma:', '/wiki/User:',
-          'oldid=', 'redirect=no', '.php', 'auth', 'login'
-        ];
-        return junkPatterns.some(p => url.includes(p));
-      };
-
-      const links = $('a').map((i, el) => {
-        const href = $(el).attr('href');
-        if (!href) return null;
-        try {
-          const abs = new URL(href, target.url).href.split('#')[0];
-          
-          if (this.onlyExternalDomains) {
-            try {
-              const currentHost = new URL(target.url).hostname;
-              const linkHost = new URL(abs).hostname;
-              // If hosts match (even roughly), skip it
-              if (currentHost.replace('www.', '') === linkHost.replace('www.', '')) {
-                return null;
-              }
-            } catch (e) { return null; }
-          }
-
-          if (isJunk(abs) || !abs.startsWith('http')) return null; // Skip junk links or non-http links
-          return abs;
-        } catch (e) {
-          return null;
-        }
-      }).get().filter(Boolean);
-
+  private handleWorkerResult(url: string, data: any) {
+    const { title, content, links } = data;
+    const currentDepth = dbService.getQueueItemDepth(this.id, url);
+    
+    dbService.savePage(this.id, url, currentDepth, title, content);
+    dbService.updateQueueStatus(this.id, url, 'completed');
+    
+    if (currentDepth < this.maxDepth) {
       for (const link of links) {
-        dbService.addToQueue(this.id, link, target.depth + 1);
-        discoveredCount++;
+        dbService.addToQueue(this.id, link, currentDepth + 1);
       }
-
-        if (discoveredCount > 0) log(this.id, `Found ${discoveredCount} new potential links on ${target.url}`);
-      }
-    } catch (e: any) {
-      log(this.id, `Error crawling ${target.url}: ${e.message}`, 'error');
-      dbService.updateQueueStatus(this.id, target.url, 'error');
     }
+    
+    this.activeRequests--;
+    log(this.id, `Indexed ${url} (Worker)`);
+  }
+
+  private handleWorkerError(url: string, error: string) {
+    log(this.id, `Error crawling ${url}: ${error}`, 'error');
+    dbService.updateQueueStatus(this.id, url, 'error');
+    this.activeRequests--;
+  }
+
+  public stop() {
+    this.isRunning = false;
+    this.worker.terminate();
+    dbService.updateCrawlerStatus(this.id, 'stopped');
+    log(this.id, 'Job stopped and worker terminated', 'warn');
   }
 }
 
 function log(crawlerId: string, message: string, level: string = 'info') {
   console.log(`[Crawler:${crawlerId}] ${message}`);
-  dbService.addLog(crawlerId, message, level);
+  if (crawlerId !== 'Manager') {
+    dbService.addLog(crawlerId, message, level);
+  }
 }
 
 class CrawlerManager {
@@ -163,6 +128,17 @@ class CrawlerManager {
     this.jobs.set(id, job);
     job.start();
     return id;
+  }
+
+  public rehydrateJobs() {
+    const activeCrawlers = dbService.listCrawlers().filter((c: any) => c.status === 'running');
+    log('Manager', `Rehydrating ${activeCrawlers.length} active jobs...`);
+    
+    for (const crawler of activeCrawlers) {
+      const job = new CrawlJob(crawler.id, crawler.origin, crawler.max_depth, crawler.hit_rate);
+      this.jobs.set(crawler.id, job);
+      job.start(true); // Resume without re-adding origin
+    }
   }
 
   public stopJob(id: string) {
@@ -209,8 +185,19 @@ const g = global as any;
 if (process.env.NODE_ENV !== 'production') {
   if (!g.crawlerManager || !g.crawlerManager.getSuggestions) {
     g.crawlerManager = new CrawlerManager();
+    g.crawlerManager.rehydrateJobs();
+    
+    // Automatic metrics collection (every 5 minutes)
+    setInterval(() => {
+      dbService.takeMetricsSnapshot();
+    }, 1000 * 60 * 5);
   }
 }
 
 export const manager: CrawlerManager = g.crawlerManager || new CrawlerManager();
-if (process.env.NODE_ENV !== 'production') g.crawlerManager = manager;
+if (process.env.NODE_ENV !== 'production') {
+  g.crawlerManager = manager;
+} else {
+  // Production auto-resume
+  manager.rehydrateJobs();
+}

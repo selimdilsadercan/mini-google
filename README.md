@@ -1,57 +1,60 @@
-# Mini-Google: Web Crawler & Search Engine
+# 🚀 Mini-Google: Advanced Multi-Agent Web Crawler & Search Engine
 
-A high-performance, concurrent web crawler and search engine built with **Next.js 14**, **TypeScript**, and **Node.js**. This project allows crawling web pages to a specified depth and searching the indexed content in real-time.
+A high-performance, resilient, and intelligent web search ecosystem built using a **Multi-Agent AI Workflow**. This project demonstrates a senior-level architecture capable of large-scale crawling on a single machine with real-time search capabilities.
 
-## 🚀 Key Features
+## 🌟 Key Features
 
-- **Concurrent Indexing & Search:** Search indexed pages while the crawler is still active.
-- **k-Depth Crawling:** Initiate crawls from a URL with a configurable maximum hop depth.
-- **Back-Pressure Management:** Built-in rate-limiting and queue depth control to handle large-scale crawls.
-- **Real-Time Dashboard:** View indexing progress, queue status, and system performance live.
-- **Persistence (Bonus):** State is saved locally, allowing for interrupted crawls to be resumed.
-- **Language-Native:** Core crawl logic built using native fetch/Node.js to ensure maximum performance and control.
+- **Multi-Agent Orchestration:** Developed through the collaboration of specialized AI agents (Orchestrator, Dev, Design, QA).
+- **Concurrency via Worker Threads:** Utilizes Node.js `worker_threads` to isolate crawling I/O from the UI/API, ensuring 100% responsiveness.
+- **k-Depth Crawling & Deduplication:** Efficiently explores the web up to $k$ hops without redundant processing.
+- **Smart Search (BM25):** Employs the industry-standard BM25 ranking algorithm via SQLite FTS5 for highly relevant search results.
+- **Automatic Resume (Persistence):** Robust rehydration logic allows the system to continue stopped or crashed jobs automatically upon restart.
+- **Visual Analytics:** A premium Glassmorphism dashboard providing real-time telemetry, queue depth, and fleet status.
 
 ## 🛠️ Tech Stack
 
-- **Framework:** Next.js (App Router)
+- **Runtime:** [Bun](https://bun.sh/) (for high-speed execution)
+- **Framework:** Next.js 16 (App Router)
 - **Language:** TypeScript
-- **Styling:** Tailwind CSS / Modern CSS
-- **Storage:** Local JSON/SQLite for simple, single-machine persistence.
+- **Engine:** Cheerio & Node.js Native Worker Threads
+- **Database:** SQLite (Better-SQLite3) with WAL Mode for concurrent Read-Writes.
+- **Styling:** Tailwind CSS (Custom Glassmorphism System)
 
 ## 🏁 Getting Started
 
-### Prerequisites
-- Node.js 18.x or higher
-- npm or yarn
-
 ### Installation
-1. Clone the repository:
+1. Navigate to the core directory:
    ```bash
-   git clone <repository-url>
    cd core
    ```
-3. Setup Database (Optional):
-   - **Option A: Start with Pre-crawled Data (200MB):** I provide a large pre-indexed database via GitHub Releases to bypass the 100MB repository limit. This contains the data required for the `quiz.md`. Run:
-     ```bash
-     npm run db:setup
-     ```
-   - **Option B: Start from Scratch:** If you prefer to start with an empty index, skip the step above. The system will automatically generate a fresh `crawler.db` when you initiate your first crawl.
+2. Install dependencies:
+   ```bash
+   bun install
+   ```
 
 ### Running Locally
 1. Start the development server:
    ```bash
-   npm run dev
+   bun run dev
    ```
-2. Open [http://localhost:3000](http://localhost:3000) in your browser.
+2. Open [http://localhost:3000](http://localhost:3000) for the search interface.
+3. Open [http://localhost:3000/admin](http://localhost:3000/admin) for the Control Center.
 
-## 🧠 How It Works
+## 🧠 Multi-Agent Development Workflow
+This project was built using an agentic lifecycle:
+1. **The Orchestrator** defined the strategy and assigned tasks.
+2. **Dev-Agent** implemented the persistence and crawler logic.
+3. **Design-Agent** crafted the premium UI and analytics.
+4. **QA-Agent** audited data integrity and back-pressure.
 
-### Indexing Engine
-The engine uses a non-blocking, asynchronous queue to fetch pages. To manage "back-pressure," it limits the number of concurrent network requests and processes pages in batches. Deduplication is handled via a URL set to ensure no page is visited twice.
+For detailed information on agent interactions, see [multi_agent_workflow.md](./multi_agent_workflow.md).
 
-### Search Design (Requirement Answer)
-To allow search while indexing is active, I utilize a **Concurrent Reader-Writer** pattern facilitated by **SQLite (WAL Mode)** or a decoupled architecture. As new pages are parsed, they are immediately committed to a search-optimized table. This ensures the search engine queries are non-blocking and always reflect the most recently crawled data without waiting for the entire crawl to finish.
+## 📊 System Design (Requirement Answers)
+- **Back-Pressure:** Controlled via `hitRate` throttling and `maxConcurrent` request limiting within the Worker pool.
+- **Search while Indexing:** Enabled by SQLite's **Write-Ahead Logging (WAL)**, allowing the search engine to read recently committed indices without blocking the active writer.
 
-## 📜 Documentation
-- [Gereksinimler (PRD)](./product_prd.md)
+## 📜 Project Artifacts
+- [Multi-Agent Workflow](./multi_agent_workflow.md)
 - [Production Recommendations](./recommendation.md)
+- [Product Requirements (PRD)](./product_prd.md)
+- [Agent Personas](./agents/)

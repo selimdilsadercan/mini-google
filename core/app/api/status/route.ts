@@ -14,8 +14,13 @@ export async function GET(request: Request) {
   const jobStatuses = manager.getAllJobStatuses();
   const activeCount = jobStatuses.filter((j: any) => j.status === 'running').length;
   
+  const { dbService } = require('@/lib/db');
+  
   return NextResponse.json({
     totalJobs: jobStatuses.length,
-    activeJobs: activeCount
+    activeJobs: activeCount,
+    domainDistribution: dbService.getDomainDistribution(),
+    history: dbService.getHistory(),
+    stats: dbService.getStats()
   });
 }

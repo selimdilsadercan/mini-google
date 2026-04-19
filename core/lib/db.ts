@@ -5,6 +5,11 @@ const dbPath = path.resolve(process.cwd(), "crawler.db");
 const g = global as any;
 if (!g.dbInstance) {
   g.dbInstance = new Database(dbPath);
+  // High-performance concurrency settings
+  g.dbInstance.pragma('journal_mode = WAL');
+  g.dbInstance.pragma('synchronous = NORMAL');
+  g.dbInstance.pragma('busy_timeout = 5000'); // 5 second timeout for locked DB
+  g.dbInstance.pragma('cache_size = -2000'); // 2MB cache
 }
 const db = g.dbInstance;
 
@@ -28,7 +33,7 @@ db.exec(`
     title TEXT,
     content TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(crawler_id) REFERENCES crawlers(id)
+    FOREIGN KEY(crawler_id) REFERENCES crawlers(id) ON DELETE CASCADE
   );
 
   -- FTS5 Search table
@@ -46,7 +51,7 @@ db.exec(`
     depth INTEGER,
     status TEXT DEFAULT 'pending',
     PRIMARY KEY(url, crawler_id),
-    FOREIGN KEY(crawler_id) REFERENCES crawlers(id)
+    FOREIGN KEY(crawler_id) REFERENCES crawlers(id) ON DELETE CASCADE
   );
 
   -- Logs for real-time monitoring
@@ -56,7 +61,14 @@ db.exec(`
     message TEXT,
     level TEXT, -- info, warn, error
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(crawler_id) REFERENCES crawlers(id)
+    FOREIGN KEY(crawler_id) REFERENCES crawlers(id) ON DELETE CASCADE
+  );
+
+  -- Historical metrics snapshot
+  CREATE TABLE IF NOT EXISTS system_metrics (
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    total_pages INTEGER,
+    queue_depth INTEGER
   );
 `);
 
@@ -77,6 +89,11 @@ try {
   console.error("Migration failed:", e);
 }
 
+// Initialize performance settings for high-scale crawling
+db.exec("PRAGMA journal_mode = WAL;");
+db.exec("PRAGMA synchronous = NORMAL;");
+db.exec("PRAGMA busy_timeout = 5000;");
+
 export const dbService = {
   // Crawler Management
   createCrawler: (
@@ -95,14 +112,19 @@ export const dbService = {
   },
 
   listCrawlers: () => {
-    return db.prepare("SELECT * FROM crawlers ORDER BY created_at DESC").all();
+    return db.prepare("SELECT * FROM crawlers ORDER BY created_at DESC").all() as any[];
   },
 
   // Logging
   addLog: (crawlerId: string, message: string, level: string = "info") => {
-    db.prepare(
-      "INSERT INTO logs (crawler_id, message, level) VALUES (?, ?, ?)",
-    ).run(crawlerId, message, level);
+    try {
+      db.prepare(
+        "INSERT INTO logs (crawler_id, message, level) VALUES (?, ?, ?)",
+      ).run(crawlerId, message, level);
+    } catch (e) {
+      // Gracefully handle logs for IDs that don't exist in the 'crawlers' table (like 'Manager')
+      console.log(`[DB-LOG-SKIPPED] ${crawlerId}: ${message}`);
+    }
   },
 
   getLogs: (crawlerId: string, limit = 100) => {
@@ -156,17 +178,12 @@ export const dbService = {
 
   // Search & Stats
   search: (query: string, limit = 20, offset = 0, depth?: number) => {
-    // FTS5 wildcard query for broader matching
-    const ftsQuery = `"${query}"*`; 
-    // Parameter Order based on SQL placeholders: 
-    // 1. LIKE ? (relevance_score title check)
-    // 2. LOWER(?) (frequency replacement)  
-    // 3. LENGTH(?) (frequency normalization)
-    // 4. MATCH ? (FTS search)
-    // Extra if needed: depth filter, limit, offset
-    const params: any[] = [`%${query}%`, query, query, ftsQuery];
+    // Escape single quotes for safety in query
+    const escapedQuery = query.replace(/'/g, "''");
+    const ftsQuery = `"${escapedQuery}"*`; 
     
     let depthFilter = "";
+    const params: any[] = [];
     if (depth !== undefined && depth !== -1) {
       depthFilter = "AND p.depth = ?";
       params.push(depth);
@@ -181,20 +198,21 @@ export const dbService = {
         p.depth, 
         p.title, 
         COALESCE(c.origin, 'External Source') as origin_url,
-        snippet(pages_search, 2, '<b>', '</b>', '...', 20) as snippet,
-        (CASE WHEN p.title LIKE ? THEN 50 ELSE 0 END) + (10 - p.depth) as relevance_score,
-        (LENGTH(p.content) - LENGTH(REPLACE(LOWER(p.content), LOWER(?), ''))) / MAX(LENGTH(?), 1) as frequency
+        snippet(pages_search, 2, '<mark>', '</mark>', '...', 30) as snippet,
+        bm25(pages_search, 10.0, 1.0) as bm25_rank,
+        (CASE WHEN p.title LIKE '%${escapedQuery}%' THEN 5.0 ELSE 0.0 END) as title_boost
       FROM pages p
       JOIN pages_search ON p.url = pages_search.url
       LEFT JOIN crawlers c ON p.crawler_id = c.id
       WHERE pages_search MATCH ?
       ${depthFilter}
-      ORDER BY relevance_score DESC, rank ASC
+      ORDER BY (title_boost - bm25_rank) DESC
       LIMIT ? OFFSET ?
     `,
       )
-      .all(...params);
+      .all(...[ftsQuery, ...params]);
   },
+
 
   countResults: (query: string, depth?: number) => {
     const ftsQuery = `"${query}"*`;
@@ -232,18 +250,6 @@ export const dbService = {
       .all(`${query}*`);
   },
 
-  getStats: () => {
-    const visited = db
-      .prepare("SELECT COUNT(*) as count FROM pages")
-      .get() as any;
-    const queueDepth = db
-      .prepare("SELECT COUNT(*) as count FROM queue WHERE status = 'pending'")
-      .get() as any;
-    return {
-      visitedCount: visited.count,
-      queueDepth: queueDepth.count,
-    };
-  },
 
   getCrawlerStats: (id: string) => {
     const visited = db
@@ -265,10 +271,50 @@ export const dbService = {
       .all();
   },
 
+  getDomainDistribution: () => {
+    return db.prepare(`
+      SELECT 
+        REPLACE(REPLACE(SUBSTR(url, INSTR(url, '//') + 2), 'www.', ''), SUBSTR(SUBSTR(url, INSTR(url, '//') + 2), INSTR(SUBSTR(url, INSTR(url, '//') + 2), '/')), '') as domain,
+        COUNT(*) as count
+      FROM pages
+      GROUP BY domain
+      ORDER BY count DESC
+      LIMIT 10
+    `).all();
+  },
+
+  takeMetricsSnapshot: () => {
+    const visited = db.prepare("SELECT COUNT(*) as count FROM pages").get() as any;
+    const queue = db.prepare("SELECT COUNT(*) as count FROM queue WHERE status = 'pending'").get() as any;
+    db.prepare("INSERT INTO system_metrics (total_pages, queue_depth) VALUES (?, ?)").run(visited.count, queue.count);
+  },
+
+  getHistory: () => {
+    return db.prepare("SELECT * FROM system_metrics ORDER BY timestamp ASC LIMIT 100").all();
+  },
+
+  getStats: () => {
+    const pages = db.prepare("SELECT COUNT(*) as count FROM pages").get() as any;
+    const queue = db.prepare("SELECT COUNT(*) as count FROM queue WHERE status = 'pending'").get() as any;
+    return {
+      visitedCount: pages.count,
+      totalPages: pages.count,
+      queueDepth: queue.count
+    };
+  },
+
+  getQueueItemDepth: (crawlerId: string, url: string): number => {
+    const res = db
+      .prepare("SELECT depth FROM queue WHERE crawler_id = ? AND url = ?")
+      .get(crawlerId, url) as any;
+    return res ? res.depth : 0;
+  },
+
   deleteCrawler: (id: string) => {
     db.transaction(() => {
       db.prepare("DELETE FROM logs WHERE crawler_id = ?").run(id);
       db.prepare("DELETE FROM queue WHERE crawler_id = ?").run(id);
+      db.prepare("DELETE FROM pages WHERE crawler_id = ?").run(id);
       db.prepare("DELETE FROM crawlers WHERE id = ?").run(id);
     })();
   },
